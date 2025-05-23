@@ -53,3 +53,7 @@ if __name__ == "__main__":
 Check out our starter code
 [repository](https://github.com/poe-platform/server-bot-quick-start) for some examples
 you can use to get started with bot development.
+
+### Generate an OpenAPI specification
+
+Run `.venv/bin/python docs/generate_openapi_spec.py` to write `openapi_spec.json` describing the HTTP endpoints.
