@@ -131,9 +131,7 @@ bot.
 Used to output an attachment in your bot's response.
 
 #### Parameters:
-- `message_id` (`Identifier`): The message id associated with the current QueryRequest
-object. **Important**: This must be the request that is currently being handled by
-get_response. Attempting to attach files to previously handled requests will fail.
+- `message_id` (`Identifier`): The message id associated with the current QueryRequest.
 - `download_url` (`Optional[str] = None`): A url to the file to be attached to the message.
 - `download_filename` (`Optional[str] = None`): A filename to be used when storing the
 downloaded attachment. If not set, the filename from the `download_url` is used.
@@ -335,6 +333,34 @@ also includes information needed to identify the user for compute point usage.
 - `api_key` (`str = ""`): Your Poe API key, available at poe.com/api_key. You will need this in
 case you are trying to use this function from a script/shell. Note that if an `api_key` is
 provided, compute points will be charged on the account corresponding to the `api_key`.
+
+
+
+---
+
+## `fp.upload_file`
+
+Upload a file (raw bytes *or* via URL) to Poe and receive an Attachment
+object that can be returned directly from a bot or stored for later use.
+
+#### Parameters:
+- `file` (`Optional[Union[bytes, BinaryIO]] = None`): The file to upload.
+- `file_url` (`Optional[str] = None`): The URL of the file to upload.
+- `file_name` (`Optional[str] = None`): The name of the file to upload. Required if
+`file` is provided as raw bytes.
+- `api_key` (`str = ""`): Your Poe API key, available at poe.com/api_key. This can
+also be the `access_key` if called from a Poe server bot.
+
+#### Returns:
+- `Attachment`: An Attachment object representing the uploaded file.
+
+
+
+---
+
+## `fp.upload_file_sync`
+
+This is a synchronous wrapper around the async `upload_file`.
 
 
 

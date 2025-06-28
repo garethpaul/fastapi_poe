@@ -8,14 +8,18 @@ For more details, see: https://creator.poe.com/docs/server-bots-functional-guide
 import asyncio
 import contextlib
 import inspect
+import io
 import json
+import os
 import warnings
 from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Union, cast
+from typing import Any, BinaryIO, Callable, Optional, Union, cast
 
 import httpx
 import httpx_sse
+
+from fastapi_poe.sync_utils import run_sync
 
 from .types import (
     Attachment,
@@ -38,6 +42,10 @@ IDENTIFIER_LENGTH = 32
 MAX_EVENT_COUNT = 1000
 
 ErrorHandler = Callable[[Exception, str], None]
+
+
+class AttachmentUploadError(Exception):
+    """Raised when there is an error uploading an attachment."""
 
 
 class BotError(Exception):
@@ -66,12 +74,15 @@ class _BotContext:
     session: httpx.AsyncClient = field(repr=False)
     api_key: Optional[str] = field(default=None, repr=False)
     on_error: Optional[ErrorHandler] = field(default=None, repr=False)
+    extra_headers: Optional[dict[str, str]] = field(default=None, repr=False)
 
     @property
     def headers(self) -> dict[str, str]:
         headers = {"Accept": "application/json"}
         if self.api_key is not None:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        if self.extra_headers is not None:
+            headers.update(self.extra_headers)
         return headers
 
     async def report_error(
@@ -346,6 +357,7 @@ async def stream_request(
     num_tries: int = 2,
     retry_sleep_time: float = 0.5,
     base_url: str = "https://api.poe.com/bot/",
+    extra_headers: Optional[dict[str, str]] = None,
 ) -> AsyncGenerator[BotMessage, None]:
     """
 
@@ -383,6 +395,7 @@ async def stream_request(
             num_tries=num_tries,
             retry_sleep_time=retry_sleep_time,
             base_url=base_url,
+            extra_headers=extra_headers,
         ):
             if isinstance(message, ToolCallDefinition):
                 tool_calls.append(message)
@@ -404,6 +417,7 @@ async def stream_request(
             num_tries=num_tries,
             retry_sleep_time=retry_sleep_time,
             base_url=base_url,
+            extra_headers=extra_headers,
         ):
             yield message
 
@@ -448,6 +462,7 @@ async def _stream_request_with_tools(
     num_tries: int = 2,
     retry_sleep_time: float = 0.5,
     base_url: str = "https://api.poe.com/bot/",
+    extra_headers: Optional[dict[str, str]] = None,
 ) -> AsyncGenerator[Union[BotMessage, ToolCallDefinition], None]:
     tool_call_object_dict: dict[int, dict[str, Any]] = {}
     async for message in stream_request_base(
@@ -462,6 +477,7 @@ async def _stream_request_with_tools(
         num_tries=num_tries,
         retry_sleep_time=retry_sleep_time,
         base_url=base_url,
+        extra_headers=extra_headers,
     ):
         # OpenAI might return empty choices when its sending the final usage chunk
         if (
@@ -512,6 +528,7 @@ async def stream_request_base(
     num_tries: int = 2,
     retry_sleep_time: float = 0.5,
     base_url: str = "https://api.poe.com/bot/",
+    extra_headers: Optional[dict[str, str]] = None,
 ) -> AsyncGenerator[BotMessage, None]:
     if access_key != "":
         warnings.warn(
@@ -525,7 +542,11 @@ async def stream_request_base(
             session = await stack.enter_async_context(httpx.AsyncClient(timeout=600))
         url = f"{base_url}{bot_name}"
         ctx = _BotContext(
-            endpoint=url, api_key=api_key, session=session, on_error=on_error
+            endpoint=url,
+            api_key=api_key,
+            session=session,
+            on_error=on_error,
+            extra_headers=extra_headers,
         )
         got_response = False
         for i in range(num_tries):
@@ -782,3 +803,143 @@ def sync_bot_settings(
             error_message += " Check that the bot server is running."
         raise BotError(error_message) from e
     print(response.text)
+
+
+async def upload_file(
+    file: Optional[Union[bytes, BinaryIO]] = None,
+    file_url: Optional[str] = None,
+    file_name: Optional[str] = None,
+    api_key: str = "",
+    *,
+    session: Optional[httpx.AsyncClient] = None,
+    on_error: ErrorHandler = _default_error_handler,
+    num_tries: int = 2,
+    retry_sleep_time: float = 0.5,
+    base_url: str = "https://www.quora.com/poe_api/",
+) -> Attachment:
+    """
+    Upload a file (raw bytes *or* via URL) to Poe and receive an Attachment
+    object that can be returned directly from a bot or stored for later use.
+
+    #### Parameters:
+    - `file` (`Optional[Union[bytes, BinaryIO]] = None`): The file to upload.
+    - `file_url` (`Optional[str] = None`): The URL of the file to upload.
+    - `file_name` (`Optional[str] = None`): The name of the file to upload. Required if
+    `file` is provided as raw bytes.
+    - `api_key` (`str = ""`): Your Poe API key, available at poe.com/api_key. This can
+    also be the `access_key` if called from a Poe server bot.
+
+    #### Returns:
+    - `Attachment`: An Attachment object representing the uploaded file.
+
+    """
+    if not api_key:
+        raise ValueError(
+            "`api_key` is required (generate one at https://poe.com/api_key)"
+        )
+    if (file is None and file_url is None) or (file and file_url):
+        raise ValueError("Provide either `file` or `file_url`, not both.")
+
+    if file is not None and not file_name:
+        if isinstance(file, io.IOBase):
+            potential = getattr(file, "name", "")
+            if potential:
+                file_name = os.path.basename(potential)
+            if not file_name:
+                raise ValueError(
+                    "`file_name` is mandatory when file object has no name attribute."
+                )
+        elif isinstance(file, (bytes, bytearray)):
+            raise ValueError("`file_name` is mandatory when sending raw bytes.")
+        else:
+            raise ValueError("unsupported file type")
+
+    endpoint = base_url.rstrip("/") + "/file_upload_3RD_PARTY_POST"
+
+    async def _do_upload(_session: httpx.AsyncClient) -> Attachment:
+        headers = {"Authorization": api_key}
+
+        if file_url:
+            data: dict[str, str] = {"download_url": file_url}
+            if file_name:
+                data["download_filename"] = file_name
+            request = _session.build_request(
+                "POST", endpoint, data=data, headers=headers
+            )
+        else:  # raw bytes / BinaryIO
+            assert (
+                file is not None
+            ), "file is required if file_url is not provided"  # pyright
+            file_data = (
+                file.read() if not isinstance(file, (bytes, bytearray)) else file
+            )
+            files = {"file": (file_name, file_data)}
+            request = _session.build_request(
+                "POST", endpoint, files=files, headers=headers
+            )
+
+        response = await _session.send(request)
+
+        if response.status_code != 200:
+            # collect full error text (endpoint streams errors)
+            try:
+                err_txt = await response.aread()
+            except Exception:
+                err_txt = response.text
+            raise AttachmentUploadError(
+                f"{response.status_code} {response.reason_phrase}: {err_txt}"
+            )
+
+        data = response.json()
+        if not {"attachment_url", "mime_type"}.issubset(data):
+            raise AttachmentUploadError(f"Unexpected response format: {data}")
+
+        return Attachment(
+            url=data["attachment_url"],
+            content_type=data["mime_type"],
+            name=file_name or "file",
+        )
+
+    # retry wrapper
+    _sess = session or httpx.AsyncClient(timeout=120)
+    async with _sess:
+        for attempt in range(num_tries):
+            try:
+                return await _do_upload(_sess)
+            except Exception as e:
+                on_error(e, f"upload attempt {attempt+1}/{num_tries} failed")
+                if attempt == num_tries - 1:
+                    raise
+                await asyncio.sleep(retry_sleep_time)
+
+    raise AssertionError("retries exhausted")  # unreachable, but satisfies pyright
+
+
+def upload_file_sync(
+    file: Optional[Union[bytes, BinaryIO]] = None,
+    file_url: Optional[str] = None,
+    file_name: Optional[str] = None,
+    api_key: str = "",
+    *,
+    session: Optional[httpx.AsyncClient] = None,
+    on_error: ErrorHandler = _default_error_handler,
+    num_tries: int = 2,
+    retry_sleep_time: float = 0.5,
+    base_url: str = "https://www.quora.com/poe_api/",
+) -> Attachment:
+    """
+    This is a synchronous wrapper around the async `upload_file`.
+
+    """
+    coro = upload_file(
+        file=file,
+        file_url=file_url,
+        file_name=file_name,
+        api_key=api_key,
+        session=session,
+        on_error=on_error,
+        num_tries=num_tries,
+        retry_sleep_time=retry_sleep_time,
+        base_url=base_url,
+    )
+    return run_sync(coro, session=session)
