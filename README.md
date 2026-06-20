@@ -53,3 +53,20 @@ if __name__ == "__main__":
 Check out our starter code
 [repository](https://github.com/poe-platform/server-bot-quick-start) for some examples
 you can use to get started with bot development.
+
+### Generate the public OpenAPI contract
+
+Install the package in editable mode, then run the generator from any working directory:
+
+```bash
+pip install -e .
+python docs/generate_openapi_spec.py
+```
+
+The command writes `docs/openapi.json` and `docs/openapi_endpoints.md`. The schema
+documents an authenticated bot at `/bot`, including the five Poe protocol request
+variants, the HTML status response, JSON acknowledgements, and query SSE responses. Use
+`--json-output` and `--markdown-output` to select other existing directories.
+
+Generation uses a local fixture only. It does not contact Poe, OpenAI, or any other
+provider.
