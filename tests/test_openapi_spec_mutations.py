@@ -66,7 +66,7 @@ def _add_unresolved_reference(specification: dict[str, Any]) -> None:
     ],
 )
 def test_hostile_schema_mutations_are_rejected(
-    mutation: Callable[[dict[str, Any]], None],
+    mutation: Callable[[dict[str, Any]], None]
 ) -> None:
     specification = copy.deepcopy(generator.build_openapi_document())
     mutation(specification)

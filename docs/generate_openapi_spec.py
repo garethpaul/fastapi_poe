@@ -449,7 +449,10 @@ def _stage_content(path: Path, content: bytes) -> Path:
             dir=path.parent, prefix=".openapi-generator-", suffix=".tmp"
         )
         temporary_path = Path(temporary_name)
-        os.fchmod(descriptor, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        else:
+            os.chmod(temporary_path, 0o600)
         with os.fdopen(descriptor, "wb") as output_file:
             descriptor = -1
             output_file.write(content)

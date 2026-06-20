@@ -136,8 +136,9 @@ def test_write_outputs_atomically_replaces_regular_files(tmp_path: Path) -> None
 
     assert json_path.read_bytes() == b'{"openapi":"3.1.0"}\n'
     assert markdown_path.read_bytes() == b"# Endpoints\n"
-    assert json_path.stat().st_mode & 0o777 == 0o600
-    assert markdown_path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert json_path.stat().st_mode & 0o777 == 0o600
+        assert markdown_path.stat().st_mode & 0o777 == 0o600
     assert not list(tmp_path.glob(".openapi-generator-*.tmp"))
 
 
